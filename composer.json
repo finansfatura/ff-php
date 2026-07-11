@@ -17,7 +17,8 @@
         "ext-bcmath": "*"
     },
     "autoload": {
-        "psr-4": { "Finansfatura\\": "src/" }
+        "psr-4": { "Finansfatura\\": "src/" },
+        "files": ["src/exceptions.php"]
     },
     "autoload-dev": {
         "psr-4": { "Finansfatura\\Tests\\": "tests/" }
