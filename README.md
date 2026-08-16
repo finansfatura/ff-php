@@ -240,7 +240,11 @@ $oauth->revoke($storedRefreshToken);            // end the connection
 - Keep the API key server-side and encrypted; it acts on the taxpayer's company.
   Never ship it to a browser or mobile app.
 - `baseUrl` is the API host only (`https://api.finansfatura.com`) — paths are
-  built by the client. Since 1.1.0 it no longer includes `/v1/invoicing`.
+  built by the client. Since 2.0.0 it no longer includes `/v1/invoicing`.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 
