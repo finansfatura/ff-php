@@ -23,12 +23,21 @@ final class Payload
      * arrays with `title`/`qty`/`unit_price`/`vat_rate` (+ optional
      * `product_code`/`unit_code`).
      *
+     * Pass `transactionHeaderId` — the `transaction_id` returned by
+     * `Client::createOrder()`. Without it the invoice is attached to no sale: it
+     * stays out of the turnover report, the current account and stock.
+     *
+     * Leave `recipientAlias` empty unless you know the mailbox handle: the server
+     * looks the VKN up at GİB and upgrades `EARSIV` to `EFATURA` (with the right
+     * alias) when the recipient turns out to be registered.
+     *
      * Do NOT pass `issuer` in production — the server fills seller identity from
      * the company profile. It exists only for testing before the profile VKN is
      * set.
      *
-     * $opts keys: issuer(array), recipientAlias(string), invoiceTypeCode(string,
-     * default "SATIS"), note(string).
+     * $opts keys: transactionHeaderId(string), issuer(array),
+     * recipientAlias(string), invoiceTypeCode(string, default "SATIS"),
+     * note(string).
      *
      * @param array<string,mixed>        $recipient
      * @param array<int,array<string,mixed>> $lines
@@ -43,6 +52,7 @@ final class Payload
             'DocumentType' => $documentType,
             'InvoiceTypeCode' => $opts['invoiceTypeCode'] ?? 'SATIS',
             'Currency' => 'TRY',
+            'RecipientAlias' => (string) ($opts['recipientAlias'] ?? ''),
             'Recipient' => self::party($recipient),
             'Lines' => $canon,
             'Totals' => $totals,
@@ -50,27 +60,33 @@ final class Payload
         if (isset($opts['issuer'])) {
             $canonical['Issuer'] = self::party($opts['issuer']);
         }
-        if (!empty($opts['recipientAlias'])) {
-            $canonical['RecipientAlias'] = $opts['recipientAlias'];
-        }
         if (!empty($opts['note'])) {
             $canonical['Note'] = $opts['note'];
         }
 
-        return ['document_type' => $documentType, 'canonical' => $canonical];
+        $payload = ['document_type' => $documentType, 'canonical' => $canonical];
+        if (!empty($opts['transactionHeaderId'])) {
+            $payload['transaction_header_id'] = $opts['transactionHeaderId'];
+        }
+        return $payload;
     }
 
-    /** e-Arşiv (final consumer / non-registered recipient — TCKN is fine). */
+    /**
+     * e-Arşiv (final consumer / non-registered recipient — TCKN is fine).
+     *
+     * The safe default for e-commerce: if the buyer turns out to be a registered
+     * e-Fatura taxpayer, the server upgrades the document for you.
+     */
     public static function earsiv(array $recipient, array $lines, array $opts = []): array
     {
         return self::build('EARSIV', $recipient, $lines, $opts);
     }
 
     /**
-     * e-Fatura (GİB-registered recipient). `$recipientAlias` is required — the
-     * mailbox handle GİB routes by (resolve it via a recipient lookup first).
+     * e-Fatura (GİB-registered recipient). `$recipientAlias` is optional — the
+     * server resolves the mailbox handle from the VKN when you leave it empty.
      */
-    public static function efatura(array $recipient, array $lines, string $recipientAlias, array $opts = []): array
+    public static function efatura(array $recipient, array $lines, string $recipientAlias = '', array $opts = []): array
     {
         return self::build('EFATURA', $recipient, $lines, ['recipientAlias' => $recipientAlias] + $opts);
     }

@@ -44,4 +44,14 @@ eq($p['canonical']['Lines'][0]['LineTotal'], 99.99, 'line 0 exact 99.99');
 eq($p['canonical']['Lines'][1]['LineTotal'], 50.0, 'line 1 half-even 50.00');
 eq($p['canonical']['Totals']['SubtotalExclVAT'], 149.99, 'subtotal 149.99');
 
+// transaction_header_id attached, alias defaults to empty
+$lines = [['title' => 'A', 'qty' => 1, 'unit_price' => 100.0, 'vat_rate' => 0.2]];
+$p = Payload::earsiv(['vkn_tckn' => '11111111111'], $lines, ['transactionHeaderId' => '9f1c2d3e-4a5b']);
+eq($p['transaction_header_id'], '9f1c2d3e-4a5b', 'transaction_header_id attached');
+// empty alias is sent explicitly — that's what makes the server resolve it
+eq($p['canonical']['RecipientAlias'], '', 'alias defaults to empty string');
+// omitted when unknown, so the server never sees a null sale id
+$bare = Payload::earsiv(['vkn_tckn' => '1'], $lines);
+ok(!array_key_exists('transaction_header_id', $bare), 'no sale id key when not given');
+
 done('PayloadTest');

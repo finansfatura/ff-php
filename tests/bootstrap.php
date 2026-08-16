@@ -8,6 +8,7 @@ declare(strict_types=1);
 require __DIR__ . '/../src/exceptions.php';
 require __DIR__ . '/../src/Payload.php';
 require __DIR__ . '/../src/Client.php';
+require __DIR__ . '/../src/OAuth.php';
 
 $GLOBALS['__ff_fail'] = 0;
 
