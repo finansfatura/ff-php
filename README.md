@@ -26,9 +26,18 @@ Step 2 is **optional** — if you only push sales, the taxpayer invoices them fr
 the panel, one by one or in bulk. That is the smoothest start for most
 integrations.
 
-Step 1 is not optional. It is what puts the order in the turnover report, the
-current account and the stock, and what keeps the order alive when invoicing
-fails (no credits, bad VKN, GİB down).
+Step 1 is not optional, and neither is the buyer inside it. The sale is what puts
+the order in the turnover report, the current account and the stock, and what
+keeps the order alive when invoicing fails (no credits, bad VKN, GİB down). The
+buyer is what the current account ("cari") is resolved from — an existing one is
+matched on `tax_number` → `tckn` → `email` → `title`, and a new one created when
+nothing matches — so `title` (or `contact_name`) is required: it is the name the
+cari gets. Send `tckn` / `tax_number` when your channel has them and the matching
+gets stronger, but they are not required.
+
+Which makes the chain fixed: **cari → sale → document.** `transactionHeaderId` is required
+when you do reach step 2; the only exception is a refund (`invoiceTypeCode` = `IADE`), which stays
+unattached so the sale is not counted twice.
 
 ## Quickstart
 
@@ -76,9 +85,9 @@ echo $result['invoice_id'], ' ', $result['status']; // -> ... QUEUED
 > common integration bug — the builders keep the invoice side honest, the order
 > side is yours.
 
-`transactionHeaderId` links the invoice to the sale. Without it the invoice
-exists but the sale does not know about it: no turnover, no current account, no
-stock movement.
+`transactionHeaderId` links the invoice to the sale — the builder throws
+without it, and so does the API. A document that hangs off no sale is invisible to
+the turnover report, the current account and stock.
 
 ### Sandbox
 

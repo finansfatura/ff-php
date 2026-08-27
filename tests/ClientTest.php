@@ -19,6 +19,16 @@ function fakeTransport(int $status, $payload, array &$calls): callable
     };
 }
 
+// A minimally valid order: id, one line, and a buyer that names the cari.
+function ffOrder(array $over = []): array
+{
+    return $over + [
+        'external_id' => 'ORD-1',
+        'buyer' => ['title' => 'Ahmet Yılmaz', 'tckn' => '11111111111'],
+        'lines' => [['title' => 'A', 'quantity' => 1, 'unit_price' => 120.0, 'vat_rate' => 20]],
+    ];
+}
+
 // issue sets idempotency header and returns json
 $calls = [];
 $ff = new Client(['apiKey' => 'ff_live_x', 'transport' => fakeTransport(200, ['invoice_id' => 'abc', 'status' => 'QUEUED'], $calls)]);
@@ -70,10 +80,27 @@ ok(!isset($calls[0]['headers']['X-Api-Key']), 'no api key header when using a to
 // createOrder hits the integrations path
 $calls = [];
 $ff = new Client(['apiKey' => 'ff_live_x', 'transport' => fakeTransport(201, ['imported' => true, 'transaction_id' => 't-1'], $calls)]);
-$out = $ff->createOrder(['external_id' => 'ORD-1', 'lines' => []]);
+$out = $ff->createOrder(ffOrder());
 eq($out['transaction_id'], 't-1', 'createOrder returns transaction_id');
 eq($calls[0]['method'], 'POST', 'createOrder method POST');
 ok(str_ends_with($calls[0]['url'], '/v1/integrations/orders'), 'createOrder url');
+
+// createOrder needs a buyer to hang the cari off
+$calls = [];
+$ff = new Client(['apiKey' => 'ff_live_x', 'transport' => fakeTransport(201, [], $calls)]);
+foreach ([
+    ffOrder(['external_id' => '']),
+    ffOrder(['lines' => []]),
+    ffOrder(['buyer' => []]),
+    ffOrder(['buyer' => ['email' => 'a@b.c']]),
+] as $bad) {
+    throwsMatching(fn() => $ff->createOrder($bad), \InvalidArgumentException::class, 'invalid order rejected');
+}
+// rejected before the request — no round trip burned on a known-bad body
+eq(count($calls), 0, 'no HTTP call for an invalid order');
+// contact_name stands in for title: it is what names the cari
+$ff->createOrder(ffOrder(['buyer' => ['contact_name' => 'Ahmet Yılmaz']]));
+eq(count($calls), 1, 'contact_name is enough to name the cari');
 
 // orderStatus joins ids and caps at 50
 $calls = [];
@@ -96,16 +123,16 @@ throwsMatching(
 // 429 is retryable, 400 is not
 $calls = [];
 $ff = new Client(['apiKey' => 'k', 'transport' => fakeTransport(429, ['message' => 'slow down'], $calls)]);
-throwsMatching(fn() => $ff->createOrder([]), RateLimitException::class, '429 maps to RateLimitException');
+throwsMatching(fn() => $ff->createOrder(ffOrder()), RateLimitException::class, '429 maps to RateLimitException');
 try {
-    $ff->createOrder([]);
+    $ff->createOrder(ffOrder());
 } catch (RateLimitException $e) {
     ok($e->retryable, '429 is retryable');
 }
 $calls = [];
 $ff = new Client(['apiKey' => 'k', 'transport' => fakeTransport(400, ['message' => 'validation error'], $calls)]);
 try {
-    $ff->createOrder([]);
+    $ff->createOrder(ffOrder());
 } catch (ValidationException $e) {
     ok(!$e->retryable, '400 is not retryable');
 }

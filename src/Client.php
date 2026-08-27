@@ -30,7 +30,10 @@ namespace Finansfatura;
 //   );
 //   $result = $ff->issueInvoice($payload, 'ORD-1042');
 //
-// Invoicing is optional: skip it and the company invoices the sales from the panel.
+// The order of the two is fixed and neither half is skippable mid-flow: the sale
+// needs a `buyer` (it becomes the current account — "cari" — the sale hangs off),
+// and the document needs the sale's `transaction_id`. Issuing the document at all
+// is still your call: leave it out and the company invoices its sales from the panel.
 final class Client
 {
     public const DEFAULT_BASE_URL = 'https://api.finansfatura.com';
@@ -84,10 +87,16 @@ final class Client
      * current account and stock, and survives a failed invoice attempt.
      *
      * `$order` needs `external_id` (your stable order id — resending it never
-     * duplicates the sale) and at least one line. Prices here are KDV-INCLUSIVE
-     * and `vat_rate` is a percentage (`20`) — the opposite of the invoice
-     * payload, which is KDV-exclusive with a ratio (`0.20`). Mixing the two up is
-     * the most common integration bug.
+     * duplicates the sale), at least one line, and a `buyer`. The buyer becomes
+     * the current account ("cari") the sale is booked against: we match an
+     * existing one on `tax_number` → `tckn` → `email` → `title`, in that order,
+     * and create one when nothing matches. Hence `title` (or `contact_name`) is
+     * required — it is the name the cari gets. `tckn` / `tax_number` are not:
+     * send them when the channel has them, and the matching gets stronger.
+     *
+     * Prices here are KDV-INCLUSIVE and `vat_rate` is a percentage (`20`) — the
+     * opposite of the invoice payload, which is KDV-exclusive with a ratio
+     * (`0.20`). Mixing the two up is the most common integration bug.
      *
      * Returns the API body; `transaction_id` is the sale id to pass on to
      * `issueInvoice`, and `already_imported` tells you it was a repeat.
@@ -97,7 +106,33 @@ final class Client
      */
     public function createOrder(array $order): array
     {
+        self::validateOrder($order);
         return self::decode($this->request('POST', '/v1/integrations/orders', ['body' => $order]));
+    }
+
+    /**
+     * Reject client-side what the server would reject anyway — one round trip
+     * saved, and the error names the field instead of arriving as a 400 body.
+     *
+     * @param array<string,mixed> $order
+     */
+    private static function validateOrder(array $order): void
+    {
+        if (empty($order['external_id'])) {
+            throw new \InvalidArgumentException("order['external_id'] is required");
+        }
+        if (empty($order['lines'])) {
+            throw new \InvalidArgumentException("order['lines'] must have at least one line");
+        }
+        $buyer = $order['buyer'] ?? [];
+        if (!is_array($buyer) || $buyer === []) {
+            throw new \InvalidArgumentException(
+                "order['buyer'] is required — the sale is booked against a cari, which is resolved from the buyer"
+            );
+        }
+        if (trim((string) ($buyer['title'] ?? '')) === '' && trim((string) ($buyer['contact_name'] ?? '')) === '') {
+            throw new \InvalidArgumentException("order['buyer'] needs 'title' (or 'contact_name') — it names the cari");
+        }
     }
 
     /**

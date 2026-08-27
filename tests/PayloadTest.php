@@ -10,7 +10,7 @@ use Finansfatura\Payload;
 $p = Payload::earsiv(['vkn_tckn' => '11111111111', 'title' => 'Ahmet'], [
     ['title' => 'A', 'qty' => 2, 'unit_price' => 100.0, 'vat_rate' => 0.2],
     ['title' => 'B', 'qty' => 1, 'unit_price' => 50.0, 'vat_rate' => 0.2],
-]);
+], ['transactionHeaderId' => 't-1']);
 eq($p['document_type'], 'EARSIV', 'document_type');
 $c = $p['canonical'];
 eq($c['DocumentType'], 'EARSIV', 'canonical DocumentType');
@@ -27,7 +27,7 @@ $p = Payload::efatura(
     ['vkn_tckn' => '1234567801', 'title' => 'Kurum'],
     [['title' => 'X', 'qty' => 1, 'unit_price' => 10.0, 'vat_rate' => 0.2]],
     'urn:mail:defaultpk@example.com',
-    ['issuer' => ['vkn_tckn' => '1234567801', 'title' => 'Satici']],
+    ['issuer' => ['vkn_tckn' => '1234567801', 'title' => 'Satici'], 'transactionHeaderId' => 't-1'],
 );
 $c = $p['canonical'];
 eq($c['DocumentType'], 'EFATURA', 'efatura DocumentType');
@@ -39,7 +39,7 @@ eq($c['Issuer']['VKNorTCKN'], '1234567801', 'issuer VKNorTCKN');
 $p = Payload::earsiv(['vkn_tckn' => '1'], [
     ['title' => 'A', 'qty' => 3, 'unit_price' => '33.33', 'vat_rate' => 0],
     ['title' => 'B', 'qty' => '1.5', 'unit_price' => '33.33', 'vat_rate' => 0],
-]);
+], ['transactionHeaderId' => 't-1']);
 eq($p['canonical']['Lines'][0]['LineTotal'], 99.99, 'line 0 exact 99.99');
 eq($p['canonical']['Lines'][1]['LineTotal'], 50.0, 'line 1 half-even 50.00');
 eq($p['canonical']['Totals']['SubtotalExclVAT'], 149.99, 'subtotal 149.99');
@@ -50,8 +50,15 @@ $p = Payload::earsiv(['vkn_tckn' => '11111111111'], $lines, ['transactionHeaderI
 eq($p['transaction_header_id'], '9f1c2d3e-4a5b', 'transaction_header_id attached');
 // empty alias is sent explicitly — that's what makes the server resolve it
 eq($p['canonical']['RecipientAlias'], '', 'alias defaults to empty string');
-// omitted when unknown, so the server never sees a null sale id
-$bare = Payload::earsiv(['vkn_tckn' => '1'], $lines);
-ok(!array_key_exists('transaction_header_id', $bare), 'no sale id key when not given');
+// the sale is mandatory — every document hangs off one
+throwsMatching(
+    fn() => Payload::earsiv(['vkn_tckn' => '1'], $lines),
+    \InvalidArgumentException::class,
+    'sale-less document rejected'
+);
+// …except a refund: attaching it would count the sale twice
+$iade = Payload::earsiv(['vkn_tckn' => '1'], $lines, ['invoiceTypeCode' => 'IADE']);
+ok(!array_key_exists('transaction_header_id', $iade), 'IADE is issued unattached');
+eq($iade['canonical']['InvoiceTypeCode'], 'IADE', 'IADE invoice type code');
 
 done('PayloadTest');
