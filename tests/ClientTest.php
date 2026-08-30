@@ -19,7 +19,7 @@ function fakeTransport(int $status, $payload, array &$calls): callable
     };
 }
 
-// A minimally valid order: id, one line, and a buyer that names the cari.
+// A minimally valid order: id, one line, and a buyer that names the recipient.
 function ffOrder(array $over = []): array
 {
     return $over + [
@@ -85,7 +85,7 @@ eq($out['transaction_id'], 't-1', 'createOrder returns transaction_id');
 eq($calls[0]['method'], 'POST', 'createOrder method POST');
 ok(str_ends_with($calls[0]['url'], '/v1/integrations/orders'), 'createOrder url');
 
-// createOrder needs a buyer to hang the cari off
+// createOrder needs a buyer to name the document recipient
 $calls = [];
 $ff = new Client(['apiKey' => 'ff_live_x', 'transport' => fakeTransport(201, [], $calls)]);
 foreach ([
@@ -98,9 +98,9 @@ foreach ([
 }
 // rejected before the request — no round trip burned on a known-bad body
 eq(count($calls), 0, 'no HTTP call for an invalid order');
-// contact_name stands in for title: it is what names the cari
+// contact_name stands in for title: it is what names the recipient
 $ff->createOrder(ffOrder(['buyer' => ['contact_name' => 'Ahmet Yılmaz']]));
-eq(count($calls), 1, 'contact_name is enough to name the cari');
+eq(count($calls), 1, 'contact_name is enough to name the recipient');
 
 // orderStatus joins ids and caps at 50
 $calls = [];

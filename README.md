@@ -27,15 +27,31 @@ the panel, one by one or in bulk. That is the smoothest start for most
 integrations.
 
 Step 1 is not optional, and neither is the buyer inside it. The sale is what puts
-the order in the turnover report, the current account and the stock, and what
-keeps the order alive when invoicing fails (no credits, bad VKN, GİB down). The
-buyer is what the current account ("cari") is resolved from — an existing one is
-matched on `tax_number` → `tckn` → `email` → `title`, and a new one created when
-nothing matches — so `title` (or `contact_name`) is required: it is the name the
-cari gets. Send `tckn` / `tax_number` when your channel has them and the matching
-gets stronger, but they are not required.
+the order in the turnover report and the stock, and what keeps the order alive
+when invoicing fails (no credits, bad VKN, GİB down). The buyer is **copied onto
+the sale** as the document's billing recipient — no current account ("cari") is
+created — so `title` (or `contact_name`) is required: it names who the document
+is issued to.
 
-Which makes the chain fixed: **cari → sale → document.** `transactionHeaderId` is required
+The copy is deliberate: a document carries the recipient as they were when it was
+issued.
+
+| buyer field | on the document |
+|---|---|
+| `title` — required, falls back to `contact_name` | Unvan / Ad Soyad |
+| `tax_number` (10) / `tckn` (11) | VKN/TCKN — **one** field; `tax_number` wins if both are sent |
+| `tax_office` | Vergi dairesi |
+| `address` | Adres |
+| `email` | E-posta — see below |
+| `phone` | Telefon |
+
+Neither identity is required (your channel may not hold it), but send it when you
+have it: without a VKN we cannot look the recipient up at GİB and upgrade the
+document to e-Fatura. Send `email` too — on an e-Arşiv document GİB's mandatory
+delivery-type field is derived from it: `ELEKTRONIK` when there is an address,
+`KAGIT` when there is not.
+
+Which makes the chain fixed: **buyer → sale → document.** `transactionHeaderId` is required
 when you do reach step 2; the only exception is a refund (`invoiceTypeCode` = `IADE`), which stays
 unattached so the sale is not counted twice.
 
@@ -55,10 +71,12 @@ $sale = $ff->createOrder([
     'payment_status' => 'PAID',
     'currency' => 'TRY',
     'total_price' => 120.0,
+    // Belgenin alıcısı: unvan/ad soyad, VKN/TCKN, vergi dairesi, adres, e-posta, telefon
     'buyer' => [
         'title' => 'Ahmet Yılmaz',
         'tckn' => '11111111111',
         'email' => 'ahmet@example.com',
+        'phone' => '5551112233',
         'address' => 'Kadıköy / İstanbul',
     ],
     'lines' => [[
@@ -191,7 +209,8 @@ upgraded to `EFATURA` with the mailbox alias resolved, everyone else stays
 $payload = Payload::efatura(
     ['vkn_tckn' => '1234567890', 'title' => 'Kurum A.Ş.'],
     [/* lines */],
-    // 'urn:mail:defaultpk@example.com',   // only if you already know the alias
+    '',                                    // alias: leave empty, the server resolves it
+    ['transactionHeaderId' => $sale['transaction_id']],
 );
 ```
 
