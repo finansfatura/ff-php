@@ -167,6 +167,110 @@ final class Client
         ));
     }
 
+    /**
+     * POST /v1/integrations/refunds — send a refund.
+     *
+     * A refund is its OWN document (an `IADE` invoice) with its own idempotency
+     * key, and it is deliberately not attached to the sale — attaching it would
+     * count the sale twice.
+     *
+     * `$refund` needs `external_id` (your stable refund id — resending it never
+     * duplicates), `order_external_id` (the sale it refunds), at least one line
+     * and a `buyer`. Lines carry POSITIVE amounts: the document type, not the
+     * sign, says it is a refund. Prices are KDV-INCLUSIVE and `vat_rate` is a
+     * percentage, exactly as in `createOrder()`.
+     *
+     * A refund of a foreign-currency sale still needs the rate; send the same
+     * `exchange_rate` the sale carried, or the document cannot be issued.
+     *
+     * @param array<string,mixed> $refund
+     * @return array<string,mixed>
+     */
+    public function refund(array $refund): array
+    {
+        foreach (['external_id', 'order_external_id'] as $required) {
+            if (($refund[$required] ?? '') === '') {
+                throw new \InvalidArgumentException("$required is required");
+            }
+        }
+        if (empty($refund['lines'])) {
+            throw new \InvalidArgumentException('at least one line is required');
+        }
+        return self::decode($this->request('POST', '/v1/integrations/refunds', ['body' => $refund]));
+    }
+
+    /**
+     * POST /v1/integrations/orders/invoice-attached — tell us the document has
+     * been written back onto the order in your channel.
+     *
+     * Nothing about the document changes; this only fills the "carried to the
+     * channel" column in the taxpayer's panel, so they can see which sales are
+     * fully round-tripped. Safe to repeat.
+     */
+    public function invoiceAttached(string $provider, string $externalId, string $invoiceId): bool
+    {
+        $this->request('POST', '/v1/integrations/orders/invoice-attached', [
+            'body' => [
+                'provider' => $provider,
+                'external_id' => $externalId,
+                'invoice_id' => $invoiceId,
+            ],
+        ]);
+        return true;
+    }
+
+    /**
+     * GET /v1/exchange-rates — the day's central-bank (TCMB) rates.
+     *
+     * Returns `{date, rates: {USD: 41.37, ...}}`. A foreign-currency sale cannot
+     * be invoiced without a rate, so this is how an integration offers one
+     * instead of asking the taxpayer to type it.
+     *
+     * A currency the bulletin does not carry is simply absent — use
+     * `exchangeRate()` if you want one currency and a null when it is missing.
+     *
+     * @return array<string,mixed>
+     */
+    public function exchangeRates(): array
+    {
+        return self::decode($this->request('GET', '/v1/exchange-rates'));
+    }
+
+    /**
+     * One currency's rate, or null when the bulletin has no usable value for it.
+     *
+     * Never invents a rate: a missing rate must leave the sale waiting, not go
+     * out converted at a number nobody chose.
+     *
+     * @return array{rate:float,date:string}|null
+     */
+    public function exchangeRate(string $currency): ?array
+    {
+        $body = $this->exchangeRates();
+        $rate = $body['rates'][strtoupper($currency)] ?? null;
+        if (!is_numeric($rate) || (float) $rate <= 0 || empty($body['date'])) {
+            return null;
+        }
+        return ['rate' => (float) $rate, 'date' => (string) $body['date']];
+    }
+
+    /**
+     * GET /v1/integrations/checkouts — the cash/bank accounts a sale's payment
+     * can be booked into.
+     *
+     * Only needed if you send `payment` on a sale: `checkout_id` has to be one
+     * of these. Let the taxpayer pick; guessing books money into the wrong
+     * account, which is worse than booking none.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function checkouts(): array
+    {
+        $body = self::decode($this->request('GET', '/v1/integrations/checkouts'));
+        $items = $body['items'] ?? $body['data'] ?? $body;
+        return is_array($items) ? array_values($items) : [];
+    }
+
     // -- invoices ------------------------------------------------------------
 
     /**

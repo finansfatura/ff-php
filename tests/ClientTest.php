@@ -195,4 +195,92 @@ ok(str_ends_with($calls[1]['url'], '/v1/oauth/revoke/'), 'revoke url keeps its t
 parse_str($calls[1]['body'], $form);
 eq($form['token'], 'rt', 'revoked token sent');
 
+// --- refunds -----------------------------------------------------------------
+
+// a refund is its own document: own external_id, pointing at the sale
+$calls = [];
+$ff = new Client(['apiKey' => 'ff_live_x', 'transport' => fakeTransport(200, ['id' => 'r1'], $calls)]);
+$ff->refund([
+    'external_id' => 'REF-1',
+    'order_external_id' => 'ORD-1',
+    'currency' => 'TRY',
+    'total_price' => 120.0,
+    'lines' => [['title' => 'A', 'quantity' => 1, 'unit_price' => 120.0, 'vat_rate' => 20, 'total_price' => 120.0]],
+    'buyer' => ['title' => 'Ahmet Yılmaz'],
+]);
+ok(str_ends_with($calls[0]['url'], '/v1/integrations/refunds'), 'refund url');
+eq($calls[0]['method'], 'POST', 'refund is a POST');
+$sent = json_decode($calls[0]['body'], true);
+eq($sent['order_external_id'], 'ORD-1', 'refund points at the sale');
+
+// the two ids and the lines are not optional: a refund without them would be
+// silently unattributable
+throwsMatching(
+    fn() => $ff->refund(['order_external_id' => 'ORD-1', 'lines' => [['title' => 'A']]]),
+    \InvalidArgumentException::class,
+    'refund needs external_id'
+);
+throwsMatching(
+    fn() => $ff->refund(['external_id' => 'REF-1', 'lines' => [['title' => 'A']]]),
+    \InvalidArgumentException::class,
+    'refund needs order_external_id'
+);
+throwsMatching(
+    fn() => $ff->refund(['external_id' => 'REF-1', 'order_external_id' => 'ORD-1']),
+    \InvalidArgumentException::class,
+    'refund needs at least one line'
+);
+
+// --- invoice-attached --------------------------------------------------------
+
+$calls = [];
+$ff = new Client(['apiKey' => 'ff_live_x', 'transport' => fakeTransport(200, ['ok' => true], $calls)]);
+ok($ff->invoiceAttached('WHMCS', '4711', 'ff-inv-9'), 'invoiceAttached returns true');
+ok(str_ends_with($calls[0]['url'], '/v1/integrations/orders/invoice-attached'), 'invoice-attached url');
+$sent = json_decode($calls[0]['body'], true);
+eq($sent['provider'], 'WHMCS', 'provider travels in the body');
+eq($sent['invoice_id'], 'ff-inv-9', 'invoice id travels in the body');
+
+// --- exchange rates ----------------------------------------------------------
+
+$calls = [];
+$ff = new Client([
+    'apiKey' => 'ff_live_x',
+    'transport' => fakeTransport(200, ['date' => '2026-09-27', 'rates' => ['USD' => 41.37, 'EUR' => 48.2]], $calls),
+]);
+eq($ff->exchangeRate('usd'), ['rate' => 41.37, 'date' => '2026-09-27'], 'exchangeRate is case-insensitive');
+ok(str_ends_with($calls[0]['url'], '/v1/exchange-rates'), 'exchange-rates url');
+eq($ff->exchangeRates()['rates']['EUR'], 48.2, 'exchangeRates returns the whole bulletin');
+
+// a currency the bulletin does not carry is null, NOT an invented rate
+$ff = new Client([
+    'apiKey' => 'ff_live_x',
+    'transport' => fakeTransport(200, ['date' => '2026-09-27', 'rates' => ['EUR' => 48.2]], $calls),
+]);
+eq($ff->exchangeRate('USD'), null, 'missing currency is null');
+
+// a zero or negative rate is unusable and must not pass as a rate
+$ff = new Client([
+    'apiKey' => 'ff_live_x',
+    'transport' => fakeTransport(200, ['date' => '2026-09-27', 'rates' => ['USD' => 0]], $calls),
+]);
+eq($ff->exchangeRate('USD'), null, 'zero rate is null');
+
+// --- checkouts ---------------------------------------------------------------
+
+$calls = [];
+$ff = new Client([
+    'apiKey' => 'ff_live_x',
+    'transport' => fakeTransport(200, ['items' => [['id' => 'chk_1', 'name' => 'Kasa']]], $calls),
+]);
+eq($ff->checkouts()[0]['id'], 'chk_1', 'checkouts unwraps items');
+ok(str_ends_with($calls[0]['url'], '/v1/integrations/checkouts'), 'checkouts url');
+
+// a bare list is accepted too — the endpoint has been seen both ways
+$ff = new Client([
+    'apiKey' => 'ff_live_x',
+    'transport' => fakeTransport(200, [['id' => 'chk_2']], $calls),
+]);
+eq($ff->checkouts()[0]['id'], 'chk_2', 'checkouts accepts a bare list');
+
 done('ClientTest');

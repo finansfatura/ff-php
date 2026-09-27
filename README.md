@@ -164,6 +164,65 @@ $pdf = $ff->download($invoiceId, 'pdf');     // raw bytes; or 'html' / 'xml'
 $ff->cancel($invoiceId);                     // e-Arşiv outright; e-Fatura is a process
 ```
 
+## Refunds
+
+A refund is its **own document** (`IADE`) with its own idempotency key, and it is
+deliberately not attached to the sale — attaching it would count the sale twice.
+Lines carry **positive** amounts; the document type, not the sign, says it is a
+refund.
+
+```php
+$ff->refund([
+    'external_id'       => 'REF-2026-0007',   // your stable refund id
+    'order_external_id' => 'ORD-2026-00184',  // the sale being refunded
+    'currency'          => 'TRY',
+    'total_price'       => 120.0,
+    'lines'             => [/* same shape as the sale's lines */],
+    'buyer'             => [/* same recipient */],
+]);
+```
+
+Refunding a foreign-currency sale still needs a rate: send the same
+`exchange_rate` the sale carried, or the document cannot be issued.
+
+## Exchange rates
+
+A foreign-currency sale cannot be invoiced without a rate, so offer one instead
+of asking the taxpayer to type it:
+
+```php
+$rate = $ff->exchangeRate('USD');   // ['rate' => 41.37, 'date' => '2026-09-27'] or null
+$all  = $ff->exchangeRates();       // ['date' => ..., 'rates' => ['USD' => 41.37, ...]]
+```
+
+`null` means the bulletin has no usable value for that currency today. **Do not
+substitute one.** Leave the sale waiting and let a human enter the rate — a
+document issued at a number nobody chose is worse than a document not yet issued.
+
+## Collecting the payment
+
+Send `payment` on a sale and Finansfatura books the money into one of the
+taxpayer's cash/bank accounts. `checkout_id` has to be one of theirs:
+
+```php
+foreach ($ff->checkouts() as $checkout) {
+    // ['id' => 'chk_1', 'name' => 'Kasa', ...] — let the taxpayer pick
+}
+```
+
+Guessing books money into the wrong account, which is worse than booking none.
+
+## Telling us the document reached your channel
+
+Once you have written the invoice number back onto the order in your own system:
+
+```php
+$ff->invoiceAttached('WHMCS', '4711', $ffInvoiceId);
+```
+
+Nothing about the document changes; this fills the "carried to the channel"
+column in the taxpayer's panel. Safe to repeat.
+
 ## Errors
 
 Failed calls throw a typed exception carrying `->status`, `->body` and

@@ -2,6 +2,29 @@
 
 Notable changes per release. Versions follow [semver](https://semver.org).
 
+## [3.1.0] — 2026-09-27
+
+Four endpoints the hosted integrations (shopify, ikas) were calling by hand.
+They were never in this client, so every integration re-implemented the HTTP
+and the "a missing rate is not a rate" rule — the WHMCS module made that three.
+
+### Added
+
+- `refund()` — `POST /v1/integrations/refunds`. A refund is its own document
+  (`IADE`) with its own idempotency key and is deliberately not attached to the
+  sale; attaching it would count the sale twice. `external_id`,
+  `order_external_id` and at least one line are required.
+- `invoiceAttached()` — `POST /v1/integrations/orders/invoice-attached`. Marks a
+  sale as round-tripped in the taxpayer's panel. Safe to repeat.
+- `exchangeRates()` / `exchangeRate()` — `GET /v1/exchange-rates`. A
+  foreign-currency sale cannot be invoiced without a rate. `exchangeRate()`
+  returns `null` for a currency the bulletin does not carry, or for a zero rate:
+  a missing rate leaves the sale waiting instead of going out converted at a
+  number nobody chose.
+- `checkouts()` — `GET /v1/integrations/checkouts`. The cash/bank accounts a
+  sale's `payment.checkout_id` may point at. Accepts both the `items`-wrapped
+  and bare-list response shapes, which is how the endpoint has been seen.
+
 ## [3.0.1] — 2026-08-30
 
 Docs only, no API change: the sale no longer opens a current account.

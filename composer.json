@@ -2,10 +2,22 @@
     "name": "finansfatura/finansfatura",
     "description": "PHP client for the Finansfatura e-invoice (e-Fatura / e-Arşiv) API",
     "type": "library",
+    "version": "3.1.0",
     "license": "MIT",
-    "keywords": ["finansfatura", "efatura", "earsiv", "e-invoice", "gib", "invoicing"],
+    "keywords": [
+        "finansfatura",
+        "efatura",
+        "earsiv",
+        "e-invoice",
+        "gib",
+        "invoicing"
+    ],
     "homepage": "https://github.com/finansfatura/ff-php",
-    "authors": [{ "name": "Finansfatura" }],
+    "authors": [
+        {
+            "name": "Finansfatura"
+        }
+    ],
     "support": {
         "issues": "https://github.com/finansfatura/ff-php/issues",
         "source": "https://github.com/finansfatura/ff-php"
@@ -17,11 +29,17 @@
         "ext-bcmath": "*"
     },
     "autoload": {
-        "psr-4": { "Finansfatura\\": "src/" },
-        "files": ["src/exceptions.php"]
+        "psr-4": {
+            "Finansfatura\\": "src/"
+        },
+        "files": [
+            "src/exceptions.php"
+        ]
     },
     "autoload-dev": {
-        "psr-4": { "Finansfatura\\Tests\\": "tests/" }
+        "psr-4": {
+            "Finansfatura\\Tests\\": "tests/"
+        }
     },
     "scripts": {
         "test": "php tests/PayloadTest.php && php tests/ClientTest.php"
