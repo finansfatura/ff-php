@@ -4,7 +4,7 @@ Notable changes per release. Versions follow [semver](https://semver.org).
 
 ## [3.2.0] — 2026-10-04
 
-Everything a document needs beyond "TRY, 20%% VAT, attached to a sale". Each of
+Everything a document needs beyond "TRY, 20% VAT, attached to a sale". Each of
 these was supported by the API but unreachable from this client, so the
 documents simply could not be issued.
 
