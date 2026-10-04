@@ -12,6 +12,10 @@ namespace Finansfatura;
 // `Lines`, `Totals`, `VKNorTCKN` …). A snake_case key inside `canonical` is
 // silently ignored. These builders encode that so callers never get it wrong.
 //
+// The one exception is the `*_info` blocks (`return_info` and the
+// document-type extras): those DO carry a json tag on the server, so there the
+// snake_case key is the correct one and PascalCase is the one that gets dropped.
+//
 // Totals are computed from the lines with exact decimal (bcmath, integer-string)
 // arithmetic to avoid float kuruş drift; `LineTotal` is the KDV-excl net used
 // verbatim by the server.
@@ -40,9 +44,30 @@ final class Payload
      * the company profile. It exists only for testing before the profile VKN is
      * set.
      *
+     * A line with `vat_rate` 0 needs a VAT-exemption reason — GİB rejects a
+     * zero-VAT line without one — so pass `exemptionCode` + `exemptionReason`.
+     * The code is document-level and lands only on the zero-VAT lines; VAT-bearing
+     * lines are left alone, exactly as the server does it.
+     *
+     * `scenario` picks the e-Fatura scenario and only applies to `EFATURA`:
+     * `TEMELFATURA` (the recipient cannot answer; the document is final) or
+     * `TICARIFATURA` (the recipient may send KABUL/RED within 8 days, the
+     * default). The difference is legal, not cosmetic. e-Arşiv has no choice.
+     *
+     * A refund (`invoiceTypeCode` = `IADE`/`TEVKIFATIADE`/`YTBIADE`) needs the
+     * ORIGINAL invoice it refunds: pass `returnInfo` as
+     * `['number' => 'FF32026000000123', 'issue_date' => '2026-09-27']`. GİB
+     * rejects a refund without that reference, so this is required, not optional.
+     *
+     * `currency` + `exchangeRate` only matter on a refund: on a sale the server
+     * takes both from the sale itself. A refund repeats the rate the original
+     * sale carried — it does not set a new one.
+     *
      * $opts keys: transactionHeaderId(string), issuer(array),
      * recipientAlias(string), invoiceTypeCode(string, default "SATIS"),
-     * note(string).
+     * note(string), exemptionCode(string), exemptionReason(string),
+     * scenario(string), returnInfo(array), currency(string),
+     * exchangeRate(float), exchangeRateDate(string).
      *
      * @param array<string,mixed>        $recipient
      * @param array<int,array<string,mixed>> $lines
@@ -52,22 +77,56 @@ final class Payload
     public static function build(string $documentType, array $recipient, array $lines, array $opts = []): array
     {
         $invoiceTypeCode = (string) ($opts['invoiceTypeCode'] ?? 'SATIS');
-        if (empty($opts['transactionHeaderId']) && strtoupper($invoiceTypeCode) !== 'IADE') {
+        // Muafiyet ÜÇ iade tipini de kapsar (bkz. isReturnType): TEVKIFATIADE ve
+        // YTBIADE de iadedir ve satışa bağlanırsa aynı satış iki kez sayılır.
+        if (empty($opts['transactionHeaderId']) && !self::isReturnType($invoiceTypeCode)) {
             throw new \InvalidArgumentException(
                 'transactionHeaderId is required — create the sale first with createOrder() and pass its transaction_id'
             );
         }
-        ['canon' => $canon, 'totals' => $totals] = self::linesAndTotals($lines);
+        ['canon' => $canon, 'totals' => $totals] = self::linesAndTotals(
+            $lines,
+            (string) ($opts['exemptionCode'] ?? ''),
+            (string) ($opts['exemptionReason'] ?? ''),
+        );
+
+        $scenario = self::scenario($documentType, (string) ($opts['scenario'] ?? ''));
 
         $canonical = [
             'DocumentType' => $documentType,
             'InvoiceTypeCode' => $invoiceTypeCode,
-            'Currency' => 'TRY',
+            'Currency' => strtoupper(trim((string) ($opts['currency'] ?? 'TRY'))) ?: 'TRY',
             'RecipientAlias' => (string) ($opts['recipientAlias'] ?? ''),
             'Recipient' => self::party($recipient),
             'Lines' => $canon,
             'Totals' => $totals,
         ];
+        if ($scenario !== '') {
+            $canonical['Scenario'] = $scenario;
+        }
+        if ($canonical['Currency'] !== 'TRY') {
+            $rate = (float) ($opts['exchangeRate'] ?? 0);
+            if ($rate <= 0) {
+                throw new \InvalidArgumentException(
+                    "opts['exchangeRate'] is required when currency is not TRY — "
+                    . "a foreign-currency document cannot be issued without the TL rate"
+                );
+            }
+            $canonical['ExchangeRate'] = $rate;
+            if (!empty($opts['exchangeRateDate'])) {
+                $canonical['ExchangeRateDate'] = (string) $opts['exchangeRateDate'];
+            }
+        }
+        // İADE ATFI — anahtar snake_case: canonical'ın geri kalanı PascalCase
+        // bağlanır (alanların json tag'i yok) ama *_info blokları TAG'LIDIR.
+        // "ReturnInfo" sessizce düşer ve belge atıfsız iade olarak reddedilir.
+        if (self::isReturnType($invoiceTypeCode)) {
+            $canonical['return_info'] = ['Originals' => [self::originalRef($opts['returnInfo'] ?? null)]];
+        } elseif (isset($opts['returnInfo'])) {
+            throw new \InvalidArgumentException(
+                "opts['returnInfo'] only applies to a refund — set invoiceTypeCode to IADE"
+            );
+        }
         if (isset($opts['issuer'])) {
             $canonical['Issuer'] = self::party($opts['issuer']);
         }
@@ -102,6 +161,60 @@ final class Payload
         return self::build('EFATURA', $recipient, $lines, ['recipientAlias' => $recipientAlias] + $opts);
     }
 
+    /** IADE, TEVKIFATIADE and YTBIADE all need the original-invoice reference. */
+    private static function isReturnType(string $code): bool
+    {
+        return in_array(strtoupper(trim($code)), ['IADE', 'TEVKIFATIADE', 'YTBIADE'], true);
+    }
+
+    /**
+     * The refunded invoice's number + issue date. The date goes out as RFC 3339
+     * because the server parses it into a Go `time.Time`; a bare "2026-09-27"
+     * fails to unmarshal and surfaces as a meaningless 400.
+     *
+     * @param array{number?:string,issue_date?:string}|null $ref
+     * @return array<string,string>
+     */
+    private static function originalRef(?array $ref): array
+    {
+        $number = trim((string) ($ref['number'] ?? ''));
+        $date = trim((string) ($ref['issue_date'] ?? ''));
+        if ($number === '' || $date === '') {
+            throw new \InvalidArgumentException(
+                "a refund needs opts['returnInfo'] = ['number' => ..., 'issue_date' => 'YYYY-MM-DD'] — "
+                . "GİB rejects a refund without the original invoice reference"
+            );
+        }
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            $date .= 'T00:00:00Z';
+        }
+        return ['Number' => $number, 'IssueDate' => $date];
+    }
+
+    /**
+     * Validate the e-Fatura scenario. Empty is fine — the server defaults to
+     * TICARIFATURA. Anything else is rejected here rather than silently
+     * overwritten server-side.
+     */
+    private static function scenario(string $documentType, string $scenario): string
+    {
+        $scenario = strtoupper(trim($scenario));
+        if ($scenario === '') {
+            return '';
+        }
+        if (strtoupper($documentType) !== 'EFATURA') {
+            throw new \InvalidArgumentException(
+                "opts['scenario'] only applies to EFATURA; $documentType has a fixed scenario"
+            );
+        }
+        if ($scenario !== 'TEMELFATURA' && $scenario !== 'TICARIFATURA') {
+            throw new \InvalidArgumentException(
+                "opts['scenario'] must be TEMELFATURA or TICARIFATURA, got: $scenario"
+            );
+        }
+        return $scenario;
+    }
+
     /** @param array<string,mixed> $p */
     private static function party(array $p): array
     {
@@ -119,8 +232,10 @@ final class Payload
      * @param array<int,array<string,mixed>> $lines
      * @return array{canon:array<int,array<string,mixed>>,totals:array<string,float>}
      */
-    private static function linesAndTotals(array $lines): array
+    private static function linesAndTotals(array $lines, string $exemptionCode = '', string $exemptionReason = ''): array
     {
+        $exemptionCode = trim($exemptionCode);
+        $exemptionReason = trim($exemptionReason);
         $canon = [];
         $subtotal = '0'; // cents
         $vatTotal = '0'; // cents
@@ -131,7 +246,7 @@ final class Payload
             $vat = self::roundTo2(bcmul($lineNet, $rate['digits'], 0), 2 + $rate['scale']);
             $subtotal = bcadd($subtotal, $lineNet, 0);
             $vatTotal = bcadd($vatTotal, $vat, 0);
-            $canon[] = [
+            $line = [
                 'Title' => $l['title'],
                 'ProductCode' => $l['product_code'] ?? '',
                 'Quantity' => self::numify($l['qty']),
@@ -140,6 +255,37 @@ final class Payload
                 'VatRate' => self::numify($l['vat_rate']), // 0.20 == %20
                 'LineTotal' => self::centsToNum($lineNet),
             ];
+            // TEVKİFAT — satır bazında, kod yeterli. ORAN GÖNDERİLMEZ: her GİB
+            // kodunun yasal oranı sabittir ve sunucu oranı koddan türetir
+            // (612 temizlik 2023'te 7/10 → 9/10). Oranı istemciden almak eski
+            // entegrasyonların yanlış beyanı demekti.
+            if (!empty($l['withholding_code'])) {
+                $line['WithholdingCode'] = trim((string) $l['withholding_code']);
+                if (!empty($l['withholding_name'])) {
+                    $line['WithholdingName'] = (string) $l['withholding_name'];
+                }
+            }
+            // ÖZEL MATRAH — KDV'nin hesaplanacağı taban satırın net tutarından
+            // FARKLIYSA. İstisnayla karıştırma: orada KDV yoktur, burada vardır.
+            if (!empty($l['tax_base_amount'])) {
+                $line['TaxBaseAmount'] = self::numify($l['tax_base_amount']);
+                $line['TaxBaseCode'] = trim((string) ($l['tax_base_code'] ?? ''));
+                $line['TaxBaseReason'] = trim((string) ($l['tax_base_reason'] ?? ''));
+            }
+            // KDV İSTİSNASI — yalnız %0 satırlara. Sunucunun kuralının aynısı:
+            // KDV'li satıra iliştirilirse istisna beyanı vergili satırı da
+            // kapsamış görünür.
+            if ((float) $l['vat_rate'] === 0.0) {
+                if ($exemptionCode === '' || $exemptionReason === '') {
+                    throw new \InvalidArgumentException(
+                        "a line with vat_rate 0 needs opts['exemptionCode'] and opts['exemptionReason'] — "
+                        . "GİB rejects a zero-VAT line without an exemption reason"
+                    );
+                }
+                $line['TaxExemptionReasonCode'] = $exemptionCode;
+                $line['TaxExemptionReason'] = $exemptionReason;
+            }
+            $canon[] = $line;
         }
         $totals = [
             'SubtotalExclVAT' => self::centsToNum($subtotal),

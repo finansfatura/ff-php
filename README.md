@@ -182,22 +182,142 @@ $ff->refund([
 ]);
 ```
 
-Refunding a foreign-currency sale still needs a rate: send the same
-`exchange_rate` the sale carried, or the document cannot be issued.
+Refunding a foreign-currency sale uses the ORIGINAL sale's rate, not today's.
+Leave `exchange_rate` out and we look it up from the sale we already hold —
+refunding a months-old sale at today's rate is a wrong declaration. Send it only
+if you keep the rate yourself.
+
+### Issuing the refund document yourself
+
+If you build the refund invoice rather than pushing it through `refund()`, it
+needs the ORIGINAL invoice it refunds — GİB rejects a refund without that
+reference:
+
+```php
+$payload = Payload::earsiv($recipient, $lines, [
+    'invoiceTypeCode' => 'IADE',          // or TEVKIFATIADE / YTBIADE
+    'returnInfo' => ['number' => 'FF32026000000123', 'issue_date' => '2026-09-27'],
+]);
+```
+
+The date is sent as RFC 3339 for you; a bare `2026-09-27` would fail to parse
+server-side and come back as a meaningless 400. `number` is the 16-digit GİB
+invoice number.
+
+This is also where `currency` / `exchangeRate` matter — a refund is the one
+document with no sale to take them from:
+
+```php
+['currency' => 'USD', 'exchangeRate' => 41.37, 'exchangeRateDate' => '2026-09-27']
+```
+
+On a sale, don't send either: the server takes both from the sale itself.
+
+## VAT exemption
+
+**A zero-VAT line cannot be invoiced without an exemption reason** — GİB rejects
+it. The reason is document-level and lands only on the zero-VAT lines; VAT-bearing
+lines are left alone, so a mixed document never looks like the exemption covers
+the taxed lines too.
+
+```php
+$payload = Payload::earsiv($recipient, [
+    ['title' => 'Mal ihracatı', 'qty' => 1, 'unit_price' => 1000.0, 'vat_rate' => 0],
+    ['title' => 'Kargo',        'qty' => 1, 'unit_price' => 100.0,  'vat_rate' => 0.20],
+], [
+    'transactionHeaderId' => $sale['transaction_id'],
+    'exemptionCode'   => '301',                  // GİB 2xx (partial) / 3xx (full)
+    'exemptionReason' => '11/1-a Mal ihracatı',
+]);
+```
+
+Both are required together: GİB will not take an empty `cbc:TaxExemptionReason`,
+and a code with no text declares nothing. Leave them out with a zero-VAT line
+present and this throws before the request.
+
+On a sale, send `invoice_exemption_code` + `invoice_exemption_reason` instead —
+the reason is then stored on the sale and the invoice reads it from there,
+whichever way it is later issued.
+
+**Do not send the invoice type.** The server derives it from the lines
+(zero-VAT + exemption → `ISTISNA`).
+
+## Scenario (e-Fatura only)
+
+`TEMELFATURA` or `TICARIFATURA`. The difference is legal, not cosmetic: on a
+TEMEL invoice the recipient cannot answer and the document is final; on a TİCARİ
+one they may send KABUL/RED within 8 days. Leave it out and the server uses
+TICARIFATURA. e-Arşiv has no choice.
+
+```php
+$payload = Payload::efatura($recipient, $lines, '', [
+    'transactionHeaderId' => $sale['transaction_id'],
+    'scenario' => 'TEMELFATURA',
+]);
+```
+
+Passing it on a non-e-Fatura document throws: that document's scenario is fixed,
+and silently ignoring your choice is worse than refusing it.
+
+## Withholding and special tax base
+
+Both are per line, and they are opposite situations — withholding splits who
+*pays* the VAT, a special tax base changes what the VAT is *computed on*:
+
+```php
+$payload = Payload::efatura($recipient, [
+    ['title' => 'Temizlik hizmeti', 'qty' => 1, 'unit_price' => 1000.0, 'vat_rate' => 0.20,
+     'withholding_code' => '612', 'withholding_name' => 'Temizlik hizmeti'],
+    ['title' => 'İkinci el araç', 'qty' => 1, 'unit_price' => 550000.0, 'vat_rate' => 0.20,
+     'tax_base_amount' => 50000.0, 'tax_base_code' => '812',
+     'tax_base_reason' => 'İkinci el araç kâr marjı'],
+], '', ['transactionHeaderId' => $sale['transaction_id']]);
+```
+
+**You do not send the withholding rate.** Each GİB code carries a fixed legal
+rate and the server derives it from the code — `612` (cleaning) went from 7/10
+to 9/10 in 2023. If the rate came from you, a GİB update would leave your
+integration filing wrong declarations for years.
+
+`8xx` codes exist in *both* lists (withholding 801-825, special base 801-812)
+but they are different UBL elements and different fields. Putting a code in the
+wrong field is the mistake the format check catches.
+
+Again: no invoice type. The server derives `TEVKIFAT` / `OZELMATRAH` from the
+lines.
 
 ## Exchange rates
 
-A foreign-currency sale cannot be invoiced without a rate, so offer one instead
-of asking the taxpayer to type it:
+**You usually don't need these.** Leave `exchange_rate` off a foreign-currency
+sale (or send `0`) and the server fills in the TCMB rate itself, then tells you
+what it used:
 
 ```php
-$rate = $ff->exchangeRate('USD');   // ['rate' => 41.37, 'date' => '2026-09-27'] or null
-$all  = $ff->exchangeRates();       // ['date' => ..., 'rates' => ['USD' => 41.37, ...]]
+$sale = $ff->createOrder([
+    'external_id' => 'ORD-1', 'currency' => 'USD', /* no exchange_rate */
+    'buyer' => $buyer, 'lines' => $lines,
+]);
+$sale['exchange_rate'];        // 41.37
+$sale['exchange_rate_source']; // "TCMB" — ours. "MANUAL" when you sent your own
+$sale['exchange_rate_date'];   // "27.09.2026" — the bulletin's date
 ```
 
-`null` means the bulletin has no usable value for that currency today. **Do not
-substitute one.** Leave the sale waiting and let a human enter the rate — a
-document issued at a number nobody chose is worse than a document not yet issued.
+Send your own rate when you want yours instead of ours: it is used verbatim and
+never compared against TCMB. The bulletin is published on weekdays around 15:30
+and not at all at weekends, so a Monday-morning document carries Friday's rate —
+the returned date says so.
+
+A rate is never invented: if the bulletin does not carry that currency the
+request fails with `ERROR_EXCHANGE_RATE_REQUIRED` and asks you for one.
+
+> **`exchangeRates()` / `exchangeRate()` are OAuth-only** — an API key gets 401.
+> The endpoint lives in a service that authenticates sessions, not keys, and is
+> deliberately not opened to them. With a key, let the server fill the rate.
+
+```php
+$rate = $ff->exchangeRate('USD');   // OAuth sessions only
+$all  = $ff->exchangeRates();
+```
 
 ## Collecting the payment
 

@@ -222,12 +222,20 @@ final class Client
     /**
      * GET /v1/exchange-rates — the day's central-bank (TCMB) rates.
      *
-     * Returns `{date, rates: {USD: 41.37, ...}}`. A foreign-currency sale cannot
-     * be invoiced without a rate, so this is how an integration offers one
-     * instead of asking the taxpayer to type it.
+     * **OAUTH ONLY — an API key gets 401 here.** This endpoint lives in a
+     * service that authenticates sessions, not API keys, and it is deliberately
+     * not opened to keys.
      *
-     * A currency the bulletin does not carry is simply absent — use
-     * `exchangeRate()` if you want one currency and a null when it is missing.
+     * You almost certainly do not need it: leave `exchange_rate` off a
+     * foreign-currency sale (or send 0) and the server fills in this very rate,
+     * then reports what it used in the response (`exchange_rate`,
+     * `exchange_rate_source: "TCMB"`, `exchange_rate_date`). Send your own rate
+     * only when you want yours instead of ours — it is then used verbatim and
+     * never compared against TCMB.
+     *
+     * Returns `{date, rates: {USD: 41.37, ...}}`. A currency the bulletin does
+     * not carry is simply absent — use `exchangeRate()` if you want one
+     * currency and a null when it is missing.
      *
      * @return array<string,mixed>
      */
@@ -238,6 +246,9 @@ final class Client
 
     /**
      * One currency's rate, or null when the bulletin has no usable value for it.
+     *
+     * **OAUTH ONLY — an API key gets 401** (see `exchangeRates()`); with a key,
+     * just let the server fill the rate.
      *
      * Never invents a rate: a missing rate must leave the sale waiting, not go
      * out converted at a number nobody chose.

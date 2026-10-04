@@ -2,6 +2,55 @@
 
 Notable changes per release. Versions follow [semver](https://semver.org).
 
+## [3.2.0] — 2026-10-04
+
+Everything a document needs beyond "TRY, 20%% VAT, attached to a sale". Each of
+these was supported by the API but unreachable from this client, so the
+documents simply could not be issued.
+
+### Added
+
+- VAT exemption: `exemptionCode` / `exemptionReason` on the payload builders.
+  A zero-VAT line cannot be invoiced without a reason (GİB rejects it) and there
+  was no way to send one — those documents were unissuable. Document-level,
+  applied only to the zero-VAT lines, exactly as the server does it. Also
+  `invoice_exemption_code` / `invoice_exemption_reason` on a sale, which stores
+  the reason so any later issuing path finds it.
+- Scenario: `scenario` (`TEMELFATURA` | `TICARIFATURA`), e-Fatura only. The
+  difference is legal — on a TEMEL invoice the recipient cannot answer. A
+  recipient who refuses commercial invoices could not be billed at all before.
+- Refund reference: `returnInfo` (original invoice number + issue date). GİB
+  rejects a refund without `cac:BillingReference`, and nothing sent it. The date
+  is converted to RFC 3339 for you — a bare `2026-09-27` fails to parse
+  server-side and returns a meaningless 400.
+- Currency on the document: `currency`, `exchangeRate`, `exchangeRateDate`.
+  Only meaningful on a refund; a sale takes both from the sale itself.
+- Withholding and special tax base, per line: `withholding_code` /
+  `withholding_name`, `tax_base_amount` / `tax_base_code` / `tax_base_reason`.
+  **The withholding rate is not sent** — each GİB code's legal rate is fixed and
+  the server derives it from the code (`612` went from 7/10 to 9/10 in 2023). A
+  rate coming from the client meant a GİB update left integrations filing wrong
+  declarations for years.
+
+### Changed
+
+- A sale no longer needs a rate for a foreign currency: omit `exchange_rate` (or
+  send `0`) and the server fills in the TCMB rate, then reports what it used in
+  the response (`exchange_rate`, `exchange_rate_source`, `exchange_rate_date`).
+  Send your own and it is used verbatim, never compared against TCMB. A refund
+  takes the ORIGINAL sale's rate, not today's.
+- `TEVKIFATIADE` and `YTBIADE` are now treated as refunds like `IADE`: they too
+  are issued without a sale. Before, a withholding refund could not be issued at
+  all — the exemption only covered `IADE`.
+- The builders now throw before the request in three cases the server would
+  reject anyway, naming the field instead of returning a 400 later: a zero-VAT
+  line with no exemption, a refund with no original-invoice reference, and a
+  non-TRY document with no rate. No call that previously produced a valid
+  document is affected.
+- `exchangeRates()` / `exchangeRate()` are documented as **OAuth-only** — an API
+  key gets 401 there. They are also mostly unnecessary now: the server fills the
+  rate and tells you which one it used.
+
 ## [3.1.0] — 2026-09-27
 
 Four endpoints the hosted integrations (shopify, ikas) were calling by hand.
